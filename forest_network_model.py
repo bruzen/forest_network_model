@@ -1,8 +1,8 @@
-
-import random #as random
-import pylab as plt
-import scipy as SP
 import networkx as nx
+import numpy as np
+import scipy as sp
+from matplotlib import pyplot as plt 
+import random
 import math
 import os
 from bitstring import BitArray, BitStream
@@ -15,7 +15,7 @@ def ensure_dirs_exist(f):
 
 # INITIAILIZE VARIABLES
 def init():
-	global time, time_steps, depth, find, forget, network, positions
+	global time, time_steps, depth, find, forget, network, new_network, positions
 	time 			= 0
 	time_steps 		= 10
 	depth			= 2		# Depth of tree traversed to make a connection	(could be a list to miss those close)
@@ -36,7 +36,7 @@ def init():
 			if network.node[n]['resources'][r] == True:
 				network.node[n]['score'] += 1			
 	positions = nx.spring_layout(network)
-	nextNetwork = network.copy()
+	new_network = network.copy()
 
 # PLOT OUTPUT AND AND SAVE FIGURE
 def draw():
@@ -50,8 +50,9 @@ def draw():
 		ensure_dirs_exist(filename)	
 		plt.savefig(filename)	
 
-# LOGIG FOR EACH TIME-STEP
+# LOGIC FOR EACH TIME-STEP
 def step():
+	global network, new_network
 	for n in network.nodes_iter():
 		nbrs = network.neighbors(n)
 		# Find: For each '1' in neighbours 'resources' and gain a '1' with probability 'find'
@@ -60,17 +61,18 @@ def step():
 				if network.node[nbr]['resources'][r] == True:
 					if random.uniform(0, 1) < find:
 						if (network.node[n]['resources'][r] | network.node[nbr]['resources'][r]):
-							network.node[n]['resources'][r] = True
+							new_network.node[n]['resources'][r] = True
 		# Forget: switch each '1' in 'resources' to a '0' with probablity 'forget'
-		for r in range(len(network.node[n]['resources'])):
-			if network.node[n]['resources'][r] == True:
+		for r in range(len(new_network.node[n]['resources'])):
+			if new_network.node[n]['resources'][r] == True:
 				if random.uniform(0, 1) < forget:
-					network.node[n]['resources'][r] = False
+					new_network.node[n]['resources'][r] = False
 		# Score: count the number of '1s' in 'resources'
-		network.node[n]['score'] = 0
-		for r in range(len(network.node[n]['resources'])):
-			if network.node[n]['resources'][r] == True:
-				network.node[n]['score'] += 1
+		new_network.node[n]['score'] = 0
+		for r in range(len(new_network.node[n]['resources'])):
+			if new_network.node[n]['resources'][r] == True:
+				new_network.node[n]['score'] += 1
+		network = new_network
 
 # MAIN LOOP
 if __name__ == '__main__':

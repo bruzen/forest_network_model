@@ -1,3 +1,4 @@
+# from __future__ import print_function
 import networkx as nx
 import pandas as pd
 import numpy as np
@@ -97,38 +98,46 @@ def dfs(start, graph, new_graph, visit_prob):
                 new_graph.node[start]['resources'] = sorted(list(set(new_graph.node[start]['resources']))) 
     return new_graph
 
-def init():
+def init(params):
     """Initialization code runs at start of simulation.
 
-    """
-    global time, time_steps, nodes, k, p, prob_visit, depth, find, forget, network, new_network, positions, prob_visit, project_values_df, opportunities_found_df, total_opportunities_found, total_jobs_created
+    """ 
+    global time, time_steps, done, tree, height, branching, nodes_for_small_world, k, p, prob_visit, depth, find, forget, network, new_network, positions, prob_visit, project_values_df, total_opportunities_found, total_jobs_created, cum_jobs_not_found, time_all_jobs_found, opportunities_found_df, max_no_jobs
     # TODO: Some of these are unused. Remove them (e.g. depth, find, forget?).
-    # Good variables to play with: network type (graph or small world), time_steps, nodes, k, p, prob_visit
+
+    # Experiment parameters, defined as part of experiment and so commented out below
+    p           = params['prob_rewiring']
+    prob_visit  = params['prob_visiting']
+    tree        = params['tree']
     
     # Time parameters
     time                = 0
-    time_steps          = 500
+    time_steps          = 1000
+    done                = False # Don't perform a search for opportunities if all possible jobs have been found
 
     # Tree parameters
-    tree        = True  # If True make a tree, else make a small world network
-    branching   = 2     # Branching factor of the tree
-    height      = 4     # Height of the tree
+    ### tree        = False     # If True make a tree, else make a small world network
+    branching   = 5             # Branching factor of the tree. Should be odd so k = branching + 1 is even
+    height      = 4             # Height of the tree
 
-    # Small world network parameters (created if Tree == False)
-    nodes               = 7     # The number of nodes
-    k                   = 4     # Each node is connected to k nearest neighbors in ring topology
-    p                   = 0.03  # The probability of rewiring each edge
-    tries               = 100   # Number of attempts to generate a connected graph
-    seed                = None  # Seed for random number generator (default=None)
+    temp_tree = nx.balanced_tree(branching,height) # Temp tree used only to compute nodes for small world network
+
+    # Small world network parameters (small world network created if Tree == False)
+    nodes_for_small_world   = temp_tree.number_of_nodes()     # The number of nodes, same as for tree
+    k                       = branching + 1 # Each node is connected to k nearest neighbors in ring topology
+    ### p                       = 0.03      # The probability of rewiring each edge
+    tries                   = 100           # Number of attempts to generate a connected graph
+    seed                    = None          # Seed for random number generator (default=None)
 
     # Algorithm parameters
-    prob_visit          = 0.10  # Probability of visiting each node
+    ### prob_visit          = 0.10          # Probability of visiting each node
 
     # Results and output data
     total_opportunities_found   = 0
     total_jobs_created          = 0
-    opportunities_found_df      = pd.DataFrame(columns=('Opportunities Found', 'Jobs Created')) # Table of results stored as a pandas DataFrame
-    
+    opportunities_found_df      = pd.DataFrame(columns=('Opportunities Found', 'Jobs Created', 'Loss Measure')) # Table of results stored as a pandas DataFrame
+    cum_jobs_not_found          = 0.0 # Cummulative jobs not found. A measure of efficiency. Value from end of run used.
+    time_all_jobs_found         = int(time_steps + time_steps/5) # Time at which all jobs are found in a run. time_all_jobs_found
 
     # INITIALIZE RESOURCE VALUES AND CODES
     # TODO: Should not calculate no_resources in advance but measure it so the numbe rof resoruces cannot differ from the supplied list
@@ -151,22 +160,21 @@ def init():
             res_len_check += val[project_length]
             project_values_df.loc[df_loc] = [project_val, project_code] #[random.randint(-1,1) for n in range(2)]
             df_loc +=1
-    # project_values_df.loc[df_loc] = [project_val, [1]] # TESTING CODE SO SEARCH ALWAYS FINDS SOMETHING (SOMEONE ALWAYS HAS RESOURCE '1'). DELETE EVENTUALLY.
-    print project_values_df       
+    # project_values_df.loc[df_loc] = [project_val, [1]] # TESTING CODE SO SEARCH ALWAYS FINDS SOMETHING (SOMEONE ALWAYS HAS RESOURCE '1'). DELETE EVENTUALLY.   
+
+    max_no_jobs = project_values_df['project_val'].sum()
 
     # INITIALIZE NETWORK AND NODE ATTRIBUTES (RESOURCES AND JOBS/SCORE)
     if tree == True: # Create a tree
         network = nx.balanced_tree(branching,height)
     else: # Create a small world network 
-        network = nx.connected_watts_strogatz_graph(nodes, k, p, tries, seed) # Change just this line to change graph type/construction
+        network = nx.connected_watts_strogatz_graph(nodes_for_small_world, k, p, tries, seed) # Change just this line to change graph type/construction
     positions = nx.circular_layout(network) # Change just this line to change network graph layout
-    # positions = nx.spring_layout(network)
 
     for n in network.nodes_iter():
         network.node[n]['resources']   = []
         network.node[n]['jobs']        = 0
         network.node[n]['found_count'] = 0
-
 
     # ASSIGN RESOURCES TO NETWORK
     # Shuffle resources then just choose in order
@@ -194,7 +202,6 @@ def draw():
 
     # For plotting, try generating a dictinary with labels for each node
     labels_list=dict((n,d['resources']) for n,d in network.nodes(data=True))
-    # print labels_list
 
     res = [100 * network.node[i]['jobs'] for i in network.nodes_iter()]
     nx.draw_networkx(network,positions,edgelist=network.edges(),
@@ -209,88 +216,165 @@ def step():
     """Commands executed at each time step.
 
     """
-    global network, new_network, total_opportunities_found, total_jobs_created
+    global done, network, new_network, total_opportunities_found, total_jobs_created, cum_jobs_not_found, time_all_jobs_found
 
-    # LOOK AT NEIGHBOURS AND GET RESOURCES PROBABILISTICALLY FROM NEIGHBOURS
-    for n in network.nodes_iter():
-        new_network = dfs(n, network, new_network, prob_visit)
+    if not done:
+        # LOOK AT NEIGHBOURS AND GET RESOURCES PROBABILISTICALLY FROM NEIGHBOURS
+        for n in network.nodes_iter():
+            new_network = dfs(n, network, new_network, prob_visit)
 
-    # FIND MATCHING PATTERN IN RESOURCE LISTS
-    # TODO: This should also happen in the init code
-    # TODO: Repeats below in 'step'. Move to a helper function?
-    for n in network.nodes_iter():
-        # print 'Node %s' %(n)
-        for p in range(len(project_values_df.index)): 
-            project_pattern = project_values_df.at[p,'project_code']
-            # project_pattern = [1]#,2]
-            matches = subfinder(network.node[n]['resources'],project_pattern)
-            if matches:
-                # print 'New pattern'
-                # print network.node[n]['resources']
-                # TODO: Should this update the new_network, should it access the new network?
-                # TODO: Now we can only find opportunity in one turn. What if many nodes find it at the same time? Change so we only count once? Maybe select randomly which version to keep? Fixed for now by deleting resources if found once.
-                
-                # IF MATCHES, DELETE FOR ALL NODES SO THOSE VALUES NO LONGER GET PASSED ALONG
-                for nn in network.nodes_iter():
-                    new_network.node[nn]['resources'] = subfilter(new_network.node[nn]['resources'],project_pattern)
-                
-                # STORE DATA ON OPPORTUNITIES FOUND AND JOBS CREATED
-                new_network.node[n]['jobs'] += project_values_df.at[p,'project_val']
-                total_jobs_created          += project_values_df.at[p,'project_val']
-                new_network.node[n]['found_count']  += 1
-                total_opportunities_found           += 1
+        # FIND MATCHING PATTERN IN RESOURCE LISTS
+        # TODO: This should also happen in the init code
+        # TODO: Repeats below in 'step'. Move to a helper function?
+        for n in network.nodes_iter():
+            for p in range(len(project_values_df.index)): 
+                project_pattern = project_values_df.at[p,'project_code']
+                # project_pattern = [1]#,2]
+                matches = subfinder(network.node[n]['resources'],project_pattern)
+                if matches:
+                    # TODO: Should this update the new_network, should it access the new network?
+                    # TODO: Now we can only find opportunity in one turn. What if many nodes find it at the same time? Change so we only count once? Maybe select randomly which version to keep? Fixed for now by deleting resources if found once.
+                    
+                    # IF MATCHES, DELETE FOR ALL NODES SO THOSE VALUES NO LONGER GET PASSED ALONG
+                    for nn in network.nodes_iter():
+                        new_network.node[nn]['resources'] = subfilter(new_network.node[nn]['resources'],project_pattern)
+                    
+                    # STORE DATA ON OPPORTUNITIES FOUND AND JOBS CREATED
+                    new_network.node[n]['jobs'] += project_values_df.at[p,'project_val']
+                    total_jobs_created          += project_values_df.at[p,'project_val']
+                    new_network.node[n]['found_count']  += 1
+                    total_opportunities_found           += 1
 
-                # PRINT RESULTS TO TERMINAL AS FEEDBACK. COMMENT OUT OR DELETE LATER.
-                print ''
-                print 'Time step: %i. Found something:' %(time)
-                print matches
-                print 'Node: %i' %(n)
-                print 'Opportunities found by node so far: %i' %(new_network.node[n]['found_count'])
-                print 'Jobs created by node so far: %i' %(new_network.node[n]['jobs'])
-
-    # UPDATE TABLE WITH TOTAL OPPORTUNITIES FOUND AND JOBS CREATED IN THIS TIME STEP
-    opportunities_found_df.loc[time] = [total_opportunities_found, total_jobs_created]
+                    # # PRINT RESULTS TO TERMINAL AS FEEDBACK. COMMENT OUT OR DELETE LATER.
+                    # print ''
+                    # print 'Time step: %i. Found something:' %(time)
+                    # print matches
+                    # print 'Node: %i' %(n)
+                    # print 'Opportunities found by node so far: %i' %(new_network.node[n]['found_count'])
+                    # print 'Jobs created by this node so far: %i' %(new_network.node[n]['jobs'])
+                    # print 'Total jobs creates so far: %i' %(total_jobs_created)
+        cum_jobs_not_found += (max_no_jobs - total_jobs_created)
+        # print 'Time: %i, Cum jobs not found: %s, max_no_jobs: %s, total_jobs_created: %s' %(time, cum_jobs_not_found,max_no_jobs,total_jobs_created) 
+        if (max_no_jobs - total_jobs_created) == 0:
+            done = True
+            time_all_jobs_found = time
+    else: # if done, don't bother computing matches since no more opportunities can be found
+        # TODO: contribution to cum_jobs_n_found should be zero if done. Else throw error.
+        pass
+    opportunities_found_df.loc[time] = [total_opportunities_found, total_jobs_created, cum_jobs_not_found]
 
     # UPDATE NETWORK TO NEW_NETWORK SINCE ALL ACTIONS FOR THIS TIME STEP ARE COMPLETE
     # TODO: Check if this is right. Could one be a shallow copy? network.copy() gives a deep copy. Maybe consider network, nextNetwork = nextNetwork, network
     network = new_network
     new_network = network
 
-def final_draw():
-    """Plotting and analaysis executed at the end of the run.
+# def final_draw():
+#     """Plotting and analaysis executed at the end of the run.
 
-    """
-    # Print opportunities found DataFrame
-    print opportunities_found_df
-    # Plot opportunities found and jobs created
-    plt.cla()
-    plt.figure(); opportunities_found_df.plot(); plt.legend(loc='best')
-    plt.title('Jobs and Opportunities Found Over Time')
-    plt.xlabel('Time')
-    plt.ylabel('Count')
-    filename = 'Plots_Final/Opportunities_and_Jobs_vs_Time_' + str(nodes) + '.png'
-    ensure_dirs_exist(filename)    
-    plt.savefig(filename)      
+#     """
+#     plt.cla()
+#     df_jobs_ops = opportunities_found_df[['Opportunities Found', 'Jobs Created']]
+#     plt.figure(); df_jobs_ops.plot(); plt.legend(loc='best')
+#     plt.title('Jobs and Opportunities Found Over Time')
+#     plt.xlabel('Time')
+#     plt.ylabel('Count')
+#     filename = 'Plots_Final/Opportunities_and_Jobs_vs_Time_' + str(nodes_for_small_world) + '.png'
+#     ensure_dirs_exist(filename)    
+#     plt.savefig(filename)      
+
+#     plt.cla()
+#     df_eff = opportunities_found_df[['Loss Measure']]
+#     plt.figure(); df_eff.plot(); plt.legend(loc='best')
+#     plt.title('Loss Measure Over Time')
+#     plt.xlabel('Time')
+#     plt.ylabel('Loss Measure')
+#     filename = 'Plots_Final/Cum_Jobs_Not_Found_Measure_vs_Time_' + str(nodes_for_small_world) + '.png'
+#     ensure_dirs_exist(filename)    
+#     plt.savefig(filename) 
+
+
+def run_simulation(params):
+    global time
+    init(params)
+    # draw()
+    for time in range(time_steps):
+        step()
+        # draw()
+    time_measure = time_all_jobs_found
+    loss_measure = cum_jobs_not_found
+    return loss_measure, time_measure
 
 if __name__ == '__main__':
     """Main loop.
 
     """
-    init()
-    draw()
-    
-    for time in range(time_steps):
-        step()
-        # draw() # Comment out draw commands to speed up runs
+    # EXPERIMENT PARAMETERS
+    runs                 = 5
+    # experiments          = {'Probability_of_Rewiring': [0.05, 0.1, 0 0.2, .3, .4, .5, .6], 'Probability_of_Visiting': [0.05, 0.1, 0.2, .3, .4, .5, .6]}
+    experiments          = {'Probability_of_Visiting': [0.06, 0.1,0.14,0.18,0.22, 0.26, .3]}
+    measures             = ['loss_measure', 'time_measure']
+    networks             = ['Tree', 'Small_World']
+    # Default parameter values when parameter not being tested
+    default_prob_rewiring     = 0.1 
+    default_prob_visiting     = 0.15
 
-    final_draw()
-    
+    params = {'Probability_of_Rewiring': default_prob_rewiring, 'prob_visiting': default_prob_visiting, 'tree': True}
+    for experiment, experiment_name in enumerate(experiments):
+        print ''
+        for run in range(runs):
+            print 'run: %i' %(run) 
+            df_loc = 0
+            df_loss_measure = pd.DataFrame(columns=[networks])
+            df_time_measure = pd.DataFrame(columns=[networks])
+            for param_index, param_val in enumerate(experiments[experiment_name]):
+                print '%s: %f' %(experiment_name, experiments[experiment_name][param_index])
+                loss_measure_row = []
+                time_measure_row = []
+                for network, network_name in enumerate(networks):
+                    if experiment_name == 'Probability_of_Rewiring':
+                        if network_name == 'Tree':
+                            params = {'prob_rewiring': experiments['Probability_of_Visiting'][param_index], 'prob_visiting': default_prob_visiting, 'tree': True}
+                        elif network_name == 'Small_world':
+                            params = {'prob_rewiring': experiments['Probability_of_Visiting'][param_index], 'prob_visiting': default_prob_visiting, 'tree': False}
+                        else:
+                            pass # TODO: Throw value error. This should be impossible
+                    elif experiment_name == 'Probability_of_Visiting':
+                        if network_name == 'Tree':
+                            params = {'prob_rewiring': default_prob_rewiring, 'prob_visiting': experiments['Probability_of_Visiting'][param_index], 'tree': True}
+                        elif network_name == 'Small_World':
+                            params = {'prob_rewiring': default_prob_rewiring, 'prob_visiting': experiments['Probability_of_Visiting'][param_index], 'tree': False}
+                        else:
+                            pass # TODO: Throw value error. This should be impossible
+                    else:
+                        pass # TODO: Throw value error. This should be impossible                            
+                    loss_measure, time_measure = run_simulation(params)
+                    loss_measure_row.append(loss_measure) 
+                    time_measure_row.append(time_measure)
+
+                df_loss_measure.loc[df_loc] = loss_measure_row    # project_values_df.loc[df_loc] = [project_val, project_code]
+                df_time_measure.loc[df_loc] = time_measure_row
+                df_loc += 1
+
+            df_loss_measure['Param'] = experiments[experiment_name]
+            df_time_measure['Param'] = experiments[experiment_name]
+
+            print df_loss_measure
+            print df_time_measure
+            print ''
+
+            loss_measure_filename = 'Data/' + 'Loss_Measure-' + str(experiment_name) + '-Runs' + str(runs) + '-Nodes' + str(nodes_for_small_world) + '-Height' + str(height) + '-k' + str(k) + '-p' + str(p) + '-TimeSteps' + str(time_steps) + '/Loss_Measure-' + str(experiment_name) +'-' + 'Run_' + str(run) + '.csv'
+            ensure_dirs_exist(loss_measure_filename)
+            df_loss_measure.to_csv(loss_measure_filename)
+            
+            time_measure_filename = 'Data/' + 'Time_to_Completion-' + str(experiment_name) +'-Runs' + str(runs) + '-Nodes' + str(nodes_for_small_world) + '-Height' + str(height) + '-k' + str(k) + '-p' + str(p) + '-TimeSteps' + str(time_steps) + '/Time_to_Completion-' + str(experiment_name) +'-' + 'Run_' + str(run) + '.csv'
+            ensure_dirs_exist(time_measure_filename)
+            df_time_measure.to_csv(time_measure_filename)
 
     # TODO: Do some more checks. Add some feedback to make sure the code is right.
     # TODO: Add visualization of how network evolves.
     # TODO: Store output data and plot jobs over time.
     # NOTE: If resources not deleted, algorithm can find the same opportunity many times.
-    
+
 
 
 

@@ -41,9 +41,10 @@ for key in dataLists.keys():
     print stderrDFs[key] 
     keyDF = None 
 
-# PLOT SETTINGS
-default_font_size = 15
+# PLOT SETTING5
+default_font_size = 25
 plt.rcParams.update({'font.size': default_font_size})
+plt.rcParams.update({'figure.autolayout': True})
 
 # The "Tableau 20" colors as RGB
 # Visual of the colors: http://doktorandi.andreasherten.de/2015/03/25/tableau-colors-in-root/
@@ -59,6 +60,7 @@ for i in range(len(tableau20)):
     tableau20[i] = (r / 255., g / 255., b / 255.) 
 
 plt.figure(figsize=(10, 8)) 
+# plt.gca().tight_layout()
 
 # PLOTTING
 for key in meanDFs.keys():  
@@ -80,13 +82,13 @@ for key in meanDFs.keys():
     ax.get_yaxis().tick_left()    
 
     # Add horizontal tick lines
-    ax.yaxis.grid(True, lw=2.5, alpha=0.2)
+    ax.yaxis.grid(True, lw=3.5, alpha=0.2)
 
     # Remove the tick marks; they are unnecessary with the tick lines
     plt.tick_params(axis="both", which="both", bottom="off", top="off",  
                     labelbottom="on", left="off", right="off", labelleft="on")  
 
-    plt.title(measure + ' vs. ' + experiment)
+    plt.title(measure + ' vs. ' + experiment, y=1.08)
     # plt.title(key.replace("_", " ").title())   
     plt.ylabel(measure, fontsize = default_font_size)
     plt.xlabel(experiment, fontsize = default_font_size)  
@@ -94,7 +96,7 @@ for key in meanDFs.keys():
     color_count = 7
     for column in meanDFs[key].columns:
         if (column == "Small_World") or (column == "Tree"):
-            plt.errorbar(x=meanDFs[key]["Param"], y=meanDFs[key][column], yerr=stderrDFs[key][column], label=column, lw=2.5, color=tableau20[color_count % 20], alpha = 0.8)  
+            plt.errorbar(x=meanDFs[key]["Param"], y=meanDFs[key][column], yerr=stderrDFs[key][column], label=column, lw=4.5, color=tableau20[color_count % 20], alpha = 0.8)  
             color_count -= 7
     plt.legend(fontsize = default_font_size)
     # plt.ylim([output_min, output_max])  
